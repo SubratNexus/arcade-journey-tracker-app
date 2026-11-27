@@ -1,0 +1,64 @@
+[build]
+  command = "node tools/build.js"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# Stops Netlify from rewriting/bundling/injecting into the built files.
+[build.processing]
+  skip_processing = true
+
+[[redirects]]
+  from = "/api/analyze"
+  to = "/.netlify/functions/analyze"
+  status = 200
+
+[[redirects]]
+  from = "/api/views"
+  to = "/.netlify/functions/views"
+  status = 200
+
+[[redirects]]
+  from = "/api/release"
+  to = "/.netlify/functions/release"
+  status = 200
+
+[[redirects]]
+  from = "/api/seasons"
+  to = "/.netlify/functions/seasons"
+  status = 200
+
+[[redirects]]
+  from = "/api/community"
+  to = "/.netlify/functions/community"
+  status = 200
+
+[[redirects]]
+  from = "/api/img"
+  to = "/.netlify/functions/img"
+  status = 200
+
+[[redirects]]
+  from = "/api/intelligence"
+  to = "/.netlify/functions/intelligence"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    # Restricts external script/frame/form sources while retaining the inline scripts the app needs. Disable the official Netlify badge in the project settings.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.web3forms.com https://raw.githubusercontent.com; media-src 'self' https: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://api.web3forms.com; frame-ancestors 'self'"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+
+[[headers]]
+  for = "/app-builtin.html"
+  [headers.values]
+    X-Robots-Tag = "noindex"

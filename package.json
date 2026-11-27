@@ -1,0 +1,14 @@
+{
+  "name": "arcade-tracker",
+  "version": "8.6.2",
+  "private": true,
+  "description": "Arcade Journey Tracker v8.6.2 with Arcade Buddy hidden background research integration",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node tools/build.js",
+    "test": "node tools/smoke-test.js && node tools/intelligence-test.js && node --test tools/arcade-buddy-test.mjs && node tools/build.js",
+    "check": "node --check netlify/lib/arcade-buddy/planner.mjs && node --check netlify/lib/arcade-buddy/evidence.mjs && node --check netlify/lib/arcade-buddy/providers.mjs && node --check netlify/lib/arcade-buddy/strategy.mjs && node --check netlify/lib/arcade-buddy/agent-core.mjs && node --check netlify/functions/intelligence.js && node tools/build.js"
+  }
+}

@@ -1,0 +1,18 @@
+# Netlify and build output
+.netlify/
+dist/
+node_modules/
+
+# Local environment files and credentials
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+credentials/
+secrets/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
