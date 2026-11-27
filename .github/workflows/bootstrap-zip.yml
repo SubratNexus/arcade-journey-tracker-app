@@ -1,0 +1,78 @@
+name: Import complete Arcade Journey Tracker source
+
+on:
+  push:
+    paths:
+      - Arcade-Journey-Tracker-v8.6.2-Arcade-Buddy-GitHub-Upload.zip
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-arcade-tracker-main
+  cancel-in-progress: false
+
+jobs:
+  import-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Safely extract the full project archive
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+          import stat
+
+          archive = Path("Arcade-Journey-Tracker-v8.6.2-Arcade-Buddy-GitHub-Upload.zip")
+          if not archive.is_file():
+              raise SystemExit("Upload the named project ZIP to the repository root first.")
+
+          root = Path.cwd().resolve()
+          with ZipFile(archive) as package:
+              for member in package.infolist():
+                  name = PurePosixPath(member.filename)
+                  if name.is_absolute() or ".." in name.parts:
+                      raise SystemExit(f"Unsafe archive path blocked: {member.filename}")
+                  mode = member.external_attr >> 16
+                  if stat.S_ISLNK(mode):
+                      raise SystemExit(f"Symbolic link blocked: {member.filename}")
+                  target = (root / Path(*name.parts)).resolve()
+                  if target != root and root not in target.parents:
+                      raise SystemExit(f"Archive path escaped repository: {member.filename}")
+              package.extractall(root)
+
+          archive.unlink()
+          print("Project archive extracted. The uploaded ZIP has been removed from the repository.")
+          PY
+
+      - name: Validate JavaScript and application build
+        run: npm run check
+
+      - name: Run calculator, intelligence, and Arcade Buddy tests
+        run: npm test
+
+      - name: Commit the extracted project to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No extracted source changes were found."
+            exit 1
+          fi
+          git commit -m "feat: import full Arcade Journey Tracker with Arcade Buddy"
+          git push origin HEAD:main
