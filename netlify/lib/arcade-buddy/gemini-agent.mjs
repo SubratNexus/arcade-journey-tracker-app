@@ -89,7 +89,11 @@ export async function generateGeminiAnswer({ question, history, evidence, strate
       "evidence, say so instead of guessing."
   ].join("\n\n");
 
-  const result = await generateAnswer({ systemInstruction: SYSTEM_INSTRUCTION, userText }, options);
+  const result = await generateAnswer({
+    systemInstruction: SYSTEM_INSTRUCTION,
+    userText,
+    useGoogleSearch: researchRequested === true
+  }, options);
   if (!result.ok) return result;
-  return { ok: true, text: result.text, model: result.model };
+  return { ok: true, text: result.text, model: result.model, sources: result.sources || [], groundingUsed: result.groundingUsed === true };
 }

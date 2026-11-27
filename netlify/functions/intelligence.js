@@ -602,7 +602,7 @@ function aiConfigured() {
   return provider === 'gemini' && !!process.env.GEMINI_API_KEY;
 }
 function aiModelName() {
-  return String(process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim() || 'gemini-3.8-flash';
+  return String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash';
 }
 
 function rateAllowed(map, key, limit, windowMs) {
@@ -656,7 +656,8 @@ exports.handler = async event => {
   }
 
   if (body.action !== 'plan') return J(400, { ok: false, error: 'Unknown intelligence action.' });
-  if (!rateAllowed(memory.plans, ip, 2, 60_000)) return J(429, { ok: false, error: 'Planner limit reached for this minute. Please try again shortly.' });
+  // No application-level per-minute chat throttle: users may send successive messages.
+  // Gemini provider quotas and Netlify platform limits still apply.
   const message = cleanText(body.message || 'Build my personalised Arcade plan.', 1200);
   const profile = applyQuestionGoal(sanitiseProfile(body.profile), message);
   let feed = { programme_events: [], youtube_videos: [], skill_badges: [], arcade_games: [], completion_badges: [], generated_at: null, knowledge_version: null };
@@ -703,6 +704,9 @@ exports.handler = async event => {
   let aiReply = null;
   let aiModel = null;
   let aiFailureReason = null;
+  let aiFailureMessage = null;
+  let aiGroundingEvidence = [];
+  let aiGroundingUsed = false;
   if (aiConfigured()) {
     try {
       const { generateGeminiAnswer } = await import('../lib/arcade-buddy/gemini-agent.mjs');
@@ -718,8 +722,11 @@ exports.handler = async event => {
       if (aiResult.ok) {
         aiReply = aiResult.text;
         aiModel = aiResult.model;
+        aiGroundingUsed = aiResult.groundingUsed === true;
+        aiGroundingEvidence = Array.isArray(aiResult.sources) ? aiResult.sources.slice(0, 10) : [];
       } else if (aiResult.reason !== 'not_configured') {
         aiFailureReason = aiResult.reason;
+        aiFailureMessage = cleanText(aiResult.message || '', 220) || null;
       }
     } catch (error) {
       aiFailureReason = 'ai_module_error';
@@ -739,13 +746,16 @@ exports.handler = async event => {
     ? (research && research.answer ? research.answer : researchWarning)
     : '';
   const noAiMessage = aiFailureReason
-    ? 'Gemini could not answer this message right now. Please try again in a moment.'
-    : 'Gemini AI is not configured for this deploy. Add GEMINI_API_KEY in Netlify to enable natural-language answers.';
+    ? 'Gemini is temporarily unavailable (' + aiFailureReason + '). ' + (aiFailureMessage ? 'Provider detail: ' + aiFailureMessage + ' ' : '') + 'Please retry. The dashboard and local calculator remain available.'
+    : 'Gemini is not configured for this deployment. The site owner must add GEMINI_API_KEY to this Netlify project and redeploy.';
   const deterministicReply = personalReply || researchReply || noAiMessage;
   const reply = aiReply || deterministicReply;
   const compact = researchNeeded ? compactFeed(feed, null) : null;
-  const evidence = researchNeeded && research && research.showSources && Array.isArray(research.evidence)
-    ? research.evidence.slice(0, 12) : [];
+  const evidence = [
+    ...(researchNeeded && research && research.showSources && Array.isArray(research.evidence)
+      ? research.evidence.slice(0, 12) : []),
+    ...aiGroundingEvidence
+  ].filter((item, index, all) => item && item.url && all.findIndex(other => other && other.url === item.url) === index).slice(0, 12);
   const agentContext = {
     today: new Date().toISOString(),
     timezone: cleanText(body.timezone || 'Asia/Kolkata', 80),
@@ -756,23 +766,25 @@ exports.handler = async event => {
   const aiNote = aiReply
     ? null
     : (aiFailureReason
-      ? 'The AI model could not answer this turn (' + aiFailureReason + '); showing the deterministic research summary instead.'
+      ? 'Gemini error: ' + aiFailureReason + (aiFailureMessage ? ' — ' + aiFailureMessage : '') + '. Showing available calculator/research fallback instead.'
       : (aiConfigured() ? null : 'No AI provider is configured yet (set AI_PROVIDER and GEMINI_API_KEY in Netlify); showing the deterministic research summary.'));
   return J(200, {
     ok: true,
     reply,
     evidence,
-    source: aiReply ? 'gemini+background-research+calculator-context' : 'background-research+calculator-context',
+    source: aiReply ? (aiGroundingUsed ? 'gemini+google-search-grounding+background-research+calculator-context' : 'gemini+background-research+calculator-context') : 'background-research+calculator-context',
     externalAi: !!aiReply,
     localAi: false,
     aiApiKeyRequired: !aiConfigured(),
     aiModel,
     aiNote,
+    aiFailureReason,
     feed: compact,
     agentContext,
     taskPlanAccepted: !!taskPlan,
     feedWarning: researchNeeded ? (feedWarning || researchWarning || null) : null,
     researchUsed: !!(researchNeeded && research && research.requiresResearch),
+    googleSearchGroundingUsed: aiGroundingUsed,
     showSources: evidence.length > 0,
     privacy: 'The app sends only calculator totals, rule values, and limited badge titles to its own Netlify function (and, when an AI provider is configured, to that provider). Public research providers and the AI provider receive a redacted question and dashboard totals, not your profile URL, display name, email address, or Google login data.',
   });

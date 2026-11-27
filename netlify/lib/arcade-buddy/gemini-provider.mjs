@@ -10,7 +10,7 @@
 //                   changes free-tier model availability over time, so this
 //                   is intentionally overridable without a code change.
 
-const DEFAULT_MODEL = "gemini-3.8-flash"; // free-tier text model as of Oct 2026 — override via GEMINI_MODEL if Google changes this.
+const DEFAULT_MODEL = "gemini-2.5-flash"; // supports Google Search grounding on the Gemini API free tier (quota applies).
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 
 export function isConfigured(env = process.env) {
@@ -31,13 +31,13 @@ export function providerStatus(env = process.env) {
   };
 }
 
-// Calls Gemini with a plain system instruction + single user turn (no native
-// function-calling): research is gathered by the existing deterministic
-// providers first and handed to the model as context, see gemini-agent.mjs.
-export async function generateAnswer({ systemInstruction, userText }, {
+// Server-side Gemini request. When the caller marks the question as requiring
+// current research, use Gemini's native Google Search grounding tool. Gemini
+// 2.5 uses google_search_retrieval; Gemini 3+ uses google_search.
+export async function generateAnswer({ systemInstruction, userText, useGoogleSearch = false }, {
   fetchImpl = globalThis.fetch,
   env = process.env,
-  timeoutMs = 9000
+  timeoutMs = 28000
 } = {}) {
   if (!isConfigured(env)) {
     return { ok: false, reason: "not_configured" };
@@ -57,6 +57,11 @@ export async function generateAnswer({ systemInstruction, userText }, {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userText }] }],
+        ...(useGoogleSearch ? {
+          tools: [String(model).startsWith("gemini-2.5-")
+            ? { google_search_retrieval: {} }
+            : { google_search: {} }]
+        } : {}),
         generationConfig: { temperature: 0.3, maxOutputTokens: 900 }
       })
     });
@@ -83,7 +88,28 @@ export async function generateAnswer({ systemInstruction, userText }, {
       const blocked = candidate?.finishReason === "SAFETY" || data?.promptFeedback?.blockReason;
       return { ok: false, reason: blocked ? "blocked" : "empty_response" };
     }
-    return { ok: true, text, model, finishReason: candidate?.finishReason || null };
+    const chunks = candidate?.groundingMetadata?.groundingChunks;
+    const sources = [];
+    const seen = new Set();
+    if (Array.isArray(chunks)) {
+      for (const chunk of chunks) {
+        const web = chunk?.web || chunk?.retrievedContext;
+        const uri = String(web?.uri || web?.url || "");
+        try {
+          const parsed = new URL(uri);
+          if (parsed.protocol !== "https:" || parsed.username || parsed.password || seen.has(parsed.href)) continue;
+          seen.add(parsed.href);
+          sources.push({
+            title: String(web?.title || "Google Search result").replace(/[\u0000-\u001f]/g, " ").slice(0, 180),
+            url: parsed.href,
+            publisher: String(web?.domain || web?.displayLink || "Google Search").slice(0, 100),
+            sourceType: "google_search_grounding",
+            verificationStatus: "google_search_grounded"
+          });
+        } catch { /* ignore malformed or unsafe grounding links */ }
+      }
+    }
+    return { ok: true, text, model, sources: sources.slice(0, 10), groundingUsed: !!useGoogleSearch, finishReason: candidate?.finishReason || null };
   } catch (error) {
     const aborted = error?.name === "AbortError";
     return { ok: false, reason: aborted ? "timeout" : "network_error", message: String(error?.message || "").slice(0, 160) };

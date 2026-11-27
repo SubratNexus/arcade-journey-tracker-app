@@ -13,7 +13,7 @@ const crypto = require('crypto'), zlib = require('zlib'), vm = require('vm');
 const STORE = 'site:releases';
 // Must match the public index.html and built-in app-builtin.html app-build markers.
 // Built-in build 824 is the minimum foundation; hot releases must be 825 or higher.
-const BASE_BUILD = 824;
+const BASE_BUILD = 825;
 const HASH = process.env.ADMIN_PASSWORD_HASH || '34d094e6f9dd5d7d79fbef5e60b3f176:e7f745b602491e7455af4f69e12691a97836cc704f9e8efbba9b68d0f0520ae9';
 const SECRET = process.env.TOKEN_SECRET || crypto.createHash('sha256').update('arcade-dev|' + HASH).digest('hex');
 const MAX_ZIP = 4 * 1024 * 1024, MAX_HTML = 1536 * 1024, MAX_FILES = 40, MAX_FILE = 3 * 1024 * 1024, MAX_TOTAL = 8 * 1024 * 1024, PENDING_MS = 30 * 60e3, KEEP_HIST = 5;

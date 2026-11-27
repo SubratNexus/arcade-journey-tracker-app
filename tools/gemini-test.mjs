@@ -25,7 +25,7 @@ test("provider reports not configured when no API key is present", () => {
 test("provider reports configured once a key and provider are set", () => {
   const env = { AI_PROVIDER: "gemini", GEMINI_API_KEY: "test-key" };
   assert.equal(isConfigured(env), true);
-  assert.equal(getModelName(env), "gemini-3.8-flash");
+  assert.equal(getModelName(env), "gemini-2.5-flash");
   assert.equal(getModelName({ ...env, GEMINI_MODEL: "gemini-3.6-flash" }), "gemini-3.6-flash");
 });
 
@@ -50,7 +50,7 @@ test("generateAnswer parses a successful Gemini response", async () => {
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /12 Arcade points/);
-  assert.equal(result.model, "gemini-3.8-flash");
+  assert.equal(result.model, "gemini-2.5-flash");
 });
 
 test("generateAnswer classifies an invalid API key response", async () => {
@@ -114,6 +114,31 @@ test("intelligence.js health-check config helpers mirror the provider module", (
   process.env.AI_PROVIDER = "gemini";
   process.env.GEMINI_API_KEY = "test-key";
   assert.equal(intelligence._test.aiConfigured(), true);
-  assert.equal(intelligence._test.aiModelName(), "gemini-3.8-flash");
+  assert.equal(intelligence._test.aiModelName(), "gemini-2.5-flash");
   process.env = original;
+});
+
+
+test("live research enables native Google Search grounding and extracts safe source links", async () => {
+  let requestBody = null;
+  const result = await generateAnswer({ systemInstruction: "system", userText: "Find the latest Arcade update", useGoogleSearch: true }, {
+    env: { AI_PROVIDER: "gemini", GEMINI_API_KEY: "test-key" },
+    fetchImpl: async (_url, init) => {
+      requestBody = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({
+        candidates: [{
+          content: { parts: [{ text: "A current update was found." }] },
+          groundingMetadata: { groundingChunks: [
+            { web: { title: "Official update", uri: "https://blog.google/example" } },
+            { web: { title: "Unsafe link", uri: "javascript:alert(1)" } },
+            { web: { title: "Official update duplicate", uri: "https://blog.google/example" } }
+          ] }
+        }]
+      }) };
+    }
+  });
+  assert.deepEqual(requestBody.tools, [{ google_search_retrieval: {} }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0].url, "https://blog.google/example");
 });

@@ -222,7 +222,7 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     assert.strictEqual(generalResponse.statusCode, 200);
     const generalPayload = JSON.parse(generalResponse.body);
     assert.strictEqual(generalPayload.source, 'background-research+calculator-context');
-    assert.match(generalPayload.reply, /Gemini AI is not configured/i);
+    assert.match(generalPayload.reply, /Gemini is not configured/i);
     assert.strictEqual(generalPayload.evidence.length, 0);
     assert.strictEqual(generalPayload.showSources, false);
     assert.strictEqual(generalPayload.feedWarning, null);
@@ -236,7 +236,7 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     });
     assert.strictEqual(unrelatedPlanResponse.statusCode, 200);
     assert.strictEqual(JSON.parse(unrelatedPlanResponse.body).source, 'background-research+calculator-context');
-    assert.match(JSON.parse(unrelatedPlanResponse.body).reply, /Gemini AI is not configured/i);
+    assert.match(JSON.parse(unrelatedPlanResponse.body).reply, /Gemini is not configured/i);
     assert.strictEqual(JSON.parse(unrelatedPlanResponse.body).evidence.length, 0);
 
     const feedResponse = await api.handler({ httpMethod: 'GET', queryStringParameters: { m: 'feed' }, headers: {} });
@@ -244,13 +244,11 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     assert.strictEqual(JSON.parse(feedResponse.body).feed.programmeEvents.length, 1);
     assert.strictEqual(fetchCalls.filter(url => url.endsWith('/public-feed.json')).length, 1, 'the separate public feed view can still read discovery observations');
 
-    const rateTestIp = 'rate-limit-rule-agent-test-818';
-    for (let i = 0; i < 2; i++) {
-      const r = await api.handler({ ...event, headers: { 'x-nf-client-connection-ip': rateTestIp } });
-      assert.strictEqual(r.statusCode, 200);
+    const unlimitedChatTestIp = 'unlimited-chat-test-818';
+    for (let i = 0; i < 5; i++) {
+      const r = await api.handler({ ...event, headers: { 'x-nf-client-connection-ip': unlimitedChatTestIp } });
+      assert.strictEqual(r.statusCode, 200, 'chat requests are not blocked by an application per-minute cooldown');
     }
-    const limited = await api.handler({ ...event, headers: { 'x-nf-client-connection-ip': rateTestIp } });
-    assert.strictEqual(limited.statusCode, 429);
 
     const unauthorizedDigest = await api.handler({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ action: 'send-approved-digest' }) });
     assert.strictEqual(unauthorizedDigest.statusCode, 401);
@@ -275,5 +273,5 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
   } finally {
     global.fetch = oldFetch;
   }
-  console.log('Intelligence tests passed: PII minimisation, source allowlisting, strict human approval, deterministic planning, hidden background research, no external AI requests, rate limiting, approved-only chatbot context, separate public-feed view, digest authentication, and request-size guards.');
+  console.log('Intelligence tests passed: PII minimisation, source allowlisting, strict human approval, deterministic planning, hidden background research, no external AI requests, unthrottled chat, approved-only chatbot context, separate public-feed view, digest authentication, and request-size guards.');
 })().catch(error => { console.error(error); process.exit(1); });

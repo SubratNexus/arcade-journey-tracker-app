@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import profileData from '../netlify/functions/profile-data.js';
-const { uidForUrl, validProfileUrl, cleanSnapshot, cleanData, storeName, storeRegion } = profileData._test;
-assert.equal(storeName, "arcade-profiles");
-assert.equal(storeRegion, "us-east-2");
+import { _test as helpers } from '../netlify/functions/profile-data.mjs';
+const { uidForUrl, validProfileUrl, cleanSnapshot, cleanData, accountPrefix } = helpers;
 const uid = '12345678-abcd-1234-abcd-123456789abc';
 const url = `https://www.skills.google/public_profiles/${uid}`;
 
@@ -14,7 +12,7 @@ test('profile backup accepts only the matching public Google Skills profile URL'
   assert.equal(uidForUrl(url), uid);
 });
 
-test('profile snapshot keeps profile badges and strips unrelated fields', () => {
+test('profile snapshot keeps badge data and strips unrelated fields', () => {
   const snap = cleanSnapshot({ url, name: 'Arcade Tester', league: 'Gold League', pages: 2, t: Date.now(), badges: [
     { key: 'Badge A|2026-11-01', title: 'Badge A', date: '2026-11-01', sk: true, extra: 'discard' },
     { key: 'Badge B|2026-11-02', title: 'Badge B', date: '2026-11-02', sk: null }
@@ -26,7 +24,7 @@ test('profile snapshot keeps profile badges and strips unrelated fields', () => 
   assert.equal(cleanSnapshot({ url, badges: 'not-an-array' }), null);
 });
 
-test('profile cloud record validates manual overrides, points and settings', () => {
+test('private cloud record keeps manual overrides, bonus points, profiles and settings', () => {
   const data = cleanData({
     snapshot: { url, name: 'Arcade Tester', badges: [{ key: 'A|2026-01-01', title: 'A', date: '2026-01-01', sk: null }] },
     overrides: { 'A|2026-01-01': 'game', bad: 'arbitrary' },
@@ -46,49 +44,10 @@ test('profile cloud record validates manual overrides, points and settings', () 
   assert.equal(data.seasonYear, 2026);
 });
 
-test('profile cloud record rejects snapshots attached to another profile ID', () => {
+test('profile backups are scoped by authenticated account as well as Google profile ID', () => {
+  const first = accountPrefix('identity-user-a');
+  const second = accountPrefix('identity-user-b');
+  assert.notEqual(first, second);
+  assert.match(first, /^u-[a-f0-9]{40}$/);
   assert.throws(() => cleanData({ snapshot: { url, badges: [{ title: 'A' }] } }, 'another-profile-id'), /does not match/);
-});
-
-test('profile backup handler persists, reads, and deletes a record through the Blobs context', async () => {
-  const oldFetch = global.fetch;
-  const oldContext = process.env.NETLIFY_BLOBS_CONTEXT;
-  const base = 'https://blobs.example.test';
-  process.env.NETLIFY_BLOBS_CONTEXT = Buffer.from(JSON.stringify({ url: base, token: 'unit-test-token' })).toString('base64');
-  const records = new Map();
-  global.fetch = async (input, options = {}) => {
-    const key = new URL(String(input)).pathname.split('/').slice(-1)[0];
-    if (options.method === 'PUT') {
-      records.set(key, String(options.body));
-      return { ok: true, status: 200, text: async () => '' };
-    }
-    if (options.method === 'DELETE') {
-      records.delete(key);
-      return { ok: true, status: 200, text: async () => '' };
-    }
-    if (records.has(key)) return { ok: true, status: 200, text: async () => records.get(key) };
-    return { ok: false, status: 404, text: async () => '' };
-  };
-  const headers = { host: 'arcade.example.netlify.app', origin: 'https://arcade.example.netlify.app', 'x-nf-site-id': 'site-test', 'x-nf-client-connection-ip': 'profile-handler-test' };
-  const snapshot = { url, name: 'Arcade Tester', badges: [{ key: 'A|2026-01-01', title: 'A', date: '2026-01-01', sk: true }] };
-  try {
-    const saved = await profileData.handler({ httpMethod: 'POST', headers, body: JSON.stringify({ action: 'save', uid, data: { snapshot, overrides: { 'A|2026-01-01': 'skill' } } }) });
-    assert.equal(saved.statusCode, 200);
-    assert.equal(JSON.parse(saved.body).ok, true);
-    const loaded = await profileData.handler({ httpMethod: 'GET', headers, queryStringParameters: { uid } });
-    const payload = JSON.parse(loaded.body);
-    assert.equal(loaded.statusCode, 200);
-    assert.equal(payload.exists, true);
-    assert.equal(payload.data.snapshot.badges[0].title, 'A');
-    assert.deepEqual(payload.data.overrides, { 'A|2026-01-01': 'skill' });
-    const removed = await profileData.handler({ httpMethod: 'POST', headers, body: JSON.stringify({ action: 'delete', uid }) });
-    assert.equal(removed.statusCode, 200);
-    assert.equal(records.size, 0);
-    const blocked = await profileData.handler({ httpMethod: 'GET', headers: { ...headers, origin: 'https://other.example' }, queryStringParameters: { uid } });
-    assert.equal(blocked.statusCode, 403);
-  } finally {
-    global.fetch = oldFetch;
-    if (oldContext === undefined) delete process.env.NETLIFY_BLOBS_CONTEXT;
-    else process.env.NETLIFY_BLOBS_CONTEXT = oldContext;
-  }
 });

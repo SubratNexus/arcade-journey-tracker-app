@@ -1,17 +1,18 @@
 {
   "name": "arcade-tracker",
-  "version": "9.1.1",
+  "version": "9.2.0",
   "private": true,
-  "description": "Arcade Journey Tracker v9.1.1 with Gemini Arcade Buddy, chat refinements, and persistent Netlify Blobs profile sync",
+  "description": "Arcade Journey Tracker v9.2.0 Build 825 with native Gemini Google Search grounding, bottom-left Arcade Buddy, and private multi-device Netlify Identity cloud sync",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "node tools/build.js",
     "test": "node tools/smoke-test.js && node tools/intelligence-test.js && node --test tools/arcade-buddy-test.mjs tools/profile-data-test.mjs tools/gemini-test.mjs && node tools/agent-review-test.js && node tools/build.js",
-    "check": "node --check netlify/lib/arcade-buddy/planner.mjs && node --check netlify/lib/arcade-buddy/evidence.mjs && node --check netlify/lib/arcade-buddy/providers.mjs && node --check netlify/lib/arcade-buddy/strategy.mjs && node --check netlify/lib/arcade-buddy/agent-core.mjs && node --check netlify/lib/arcade-buddy/gemini-provider.mjs && node --check netlify/lib/arcade-buddy/gemini-agent.mjs && node --check netlify/functions/intelligence.js && node --check netlify/functions/profile-data.js && node --check netlify/functions/agent-review.js && node --check netlify/functions/release.js && node tools/build.js"
+    "check": "node --check netlify/lib/arcade-buddy/planner.mjs && node --check netlify/lib/arcade-buddy/evidence.mjs && node --check netlify/lib/arcade-buddy/providers.mjs && node --check netlify/lib/arcade-buddy/strategy.mjs && node --check netlify/lib/arcade-buddy/agent-core.mjs && node --check netlify/lib/arcade-buddy/gemini-provider.mjs && node --check netlify/lib/arcade-buddy/gemini-agent.mjs && node --check netlify/functions/intelligence.js && node --check netlify/functions/profile-data.mjs && node --check netlify/functions/agent-review.js && node --check netlify/functions/release.js && node tools/build.js"
   },
   "dependencies": {
-    "@netlify/blobs": "^11.1.12"
+    "@netlify/blobs": "^11.1.12",
+    "@netlify/identity": "^2.0.1"
   }
 }
