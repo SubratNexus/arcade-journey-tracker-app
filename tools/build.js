@@ -41,6 +41,12 @@ for (const [name, html] of [['index.html', index], ['app-builtin.html', app]]) {
   }
 }
 
+// Syntax-check browser AI modules before publishing them.
+for (const name of ['arcade-buddy-ai.js', 'arcade-buddy-ai-worker.mjs']) {
+  const result = spawnSync(process.execPath, ['--check', path.join(root, name)], { encoding: 'utf8' });
+  if (result.status !== 0) fail(`${name} has a syntax error: ${(result.stderr || result.stdout || '').trim()}`);
+}
+
 // Syntax-check every Netlify Function source file with the active Node runtime.
 const functionDir = path.join(root, 'netlify', 'functions');
 for (const name of fs.readdirSync(functionDir).filter((x) => x.endsWith('.js'))) {
@@ -51,10 +57,10 @@ for (const name of fs.readdirSync(functionDir).filter((x) => x.endsWith('.js')))
 // Publish only files the browser needs. Server code, tools, and project notes stay private.
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });
-for (const name of ['index.html', 'app-builtin.html', 'robots.txt', 'sitemap.xml']) {
+for (const name of ['index.html', 'app-builtin.html', 'robots.txt', 'sitemap.xml', 'arcade-buddy-ai.js', 'arcade-buddy-ai-worker.mjs']) {
   fs.copyFileSync(path.join(root, name), path.join(dist, name));
 }
 fs.cpSync(path.join(root, 'assets'), path.join(dist, 'assets'), { recursive: true });
 
 console.log(`[Arcade build] OK — built-in build ${appBuild}; ${fs.readdirSync(functionDir).filter((x) => x.endsWith('.js')).length} Netlify Functions syntax-checked.`);
-console.log(`[Arcade build] Published ${dist} without exposing function source or developer tools.`);
+console.log(`[Arcade build] Published ${dist} with the compact Arcade Buddy research UI and static application assets.`);

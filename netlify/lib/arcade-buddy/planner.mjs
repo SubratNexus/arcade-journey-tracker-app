@@ -33,19 +33,40 @@ export function classifyTask(question = "") {
   return "general_research";
 }
 
-export function buildResearchPlan(question = "") {
+export function requiresResearch(question = "", taskPlan = null) {
+  const lower = String(question).toLowerCase();
+  const hintedTools = Array.isArray(taskPlan?.tools) ? taskPlan.tools : [];
+  const hintedResearch = hintedTools.some((tool) => ["web", "news", "community", "intelligence", "youtube"].includes(tool));
+  const explicitResearch = /(\bsearch\b|\bresearch\b|\blook up\b|\bfind sources?\b|\bcitations?\b|\bverify\b|\bofficial (?:source|rules|announcement)\b|\blatest\b|\brecent\b|\btoday'?s? updates?\b|\bnews\b|\bannouncements?\b|\bswag\b|\bprize drop\b|\bnew (?:arcade )?(?:game|badge|event)\b|\bcurrently available\b|\bactive games?\b|\brunning events?\b|\bprogramme deadline\b|\bprogram deadline\b|\bend date\b|\bwhen does .* end\b|\bwhat is running\b|\bwhat'?s active\b)/i.test(lower);
+  const deadlinePlanning = /(before|by|until|till).{0,45}(programme|program|season|deadline|end)/i.test(lower) ||
+    /(programme|program|season).{0,35}(deadline|end date|ends)/i.test(lower);
+  const currentOpportunityPlanning = /\b(available|open|eligible|opportunities|activities)\b/i.test(lower) &&
+    /\b(earn|points|plan|games?|badges?)\b/i.test(lower);
+  const arcadePlanIntent = isArcadeRelated(lower) &&
+    /\b(plan|planner|personalised|personalized|recommend|suggest|what should i do|how can i|how do i|which should i)\b/i.test(lower) &&
+    /\b(points?|earn|badges?|games?|activities|goal|target|programme|program|arcade)\b/i.test(lower);
+  return hintedResearch || explicitResearch || deadlinePlanning || currentOpportunityPlanning || arcadePlanIntent;
+}
+
+export function buildResearchPlan(question = "", taskPlan = null) {
   const clean = String(question).trim();
   const lower = clean.toLowerCase();
+  const researchRequired = requiresResearch(clean, taskPlan);
   const arcadeRelated = isArcadeRelated(clean) || /\b(swag|prize|bonus points|points|tier|badge|programme|program|event)\b/i.test(lower);
   const taskType = classifyTask(clean);
   const currentOrNews = CURRENT_TERMS.some((term) => lower.includes(term)) ||
     /(news|announcement|swag|event|release|launch|drop)/i.test(lower);
-  const useCommunity = arcadeRelated || /(community|forum|discussion|people saying|reports|rumou?r)/i.test(lower);
-  const useRepository = arcadeRelated;
-  const useYouTube = /(youtube|video|watch|channel|creator)/i.test(lower) ||
-    (arcadeRelated && /(announcement|special|event|game|swag|build-a-thon|latest|new)/i.test(lower));
-  const useGoogleNews = currentOrNews;
-  const useDashboardCalculation = taskType === "strategy";
+  const useCommunity = researchRequired && (/(community|forum|discussion|people saying|reports|rumou?r)/i.test(lower) || (arcadeRelated && currentOrNews));
+  const useRepository = researchRequired && arcadeRelated;
+  const useYouTube = researchRequired && (/(youtube|video|watch|channel|creator)/i.test(lower) ||
+    (arcadeRelated && /(announcement|special|event|game|swag|build-a-thon|latest|new)/i.test(lower)));
+  const hintedTools = Array.isArray(taskPlan?.tools) ? new Set(taskPlan.tools.filter((x) =>
+    ["web", "news", "community", "intelligence", "youtube", "dashboard"].includes(x))) : new Set();
+  const useGoogleNews = researchRequired && (currentOrNews || hintedTools.has("news"));
+  const useDashboardCalculation = taskType === "strategy" || hintedTools.has("dashboard");
+  const useCommunityWithHints = useCommunity || hintedTools.has("community");
+  const useRepositoryWithHints = useRepository || hintedTools.has("intelligence");
+  const useYouTubeWithHints = useYouTube || hintedTools.has("youtube");
 
   const queries = [clean];
   if (arcadeRelated && !/google skills arcade/i.test(clean)) queries.push("Google Skills Arcade " + clean);
@@ -56,11 +77,13 @@ export function buildResearchPlan(question = "") {
   return {
     taskType,
     arcadeRelated,
-    useCommunity,
-    useRepository,
-    useYouTube,
+    useCommunity: useCommunityWithHints,
+    useRepository: useRepositoryWithHints,
+    useYouTube: useYouTubeWithHints,
     useGoogleNews,
     useDashboardCalculation,
+    requiresResearch: researchRequired,
+    useWebSearch: researchRequired,
     queries: [...new Set(queries)].slice(0, 2)
   };
 }

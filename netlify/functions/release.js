@@ -12,8 +12,8 @@
 const crypto = require('crypto'), zlib = require('zlib'), vm = require('vm');
 const STORE = 'site:releases';
 // Must match the public index.html and built-in app-builtin.html app-build markers.
-// Built-in build 818 is the minimum foundation; hot releases must be 819 or higher.
-const BASE_BUILD = 818;
+// Built-in build 824 is the minimum foundation; hot releases must be 825 or higher.
+const BASE_BUILD = 824;
 const HASH = process.env.ADMIN_PASSWORD_HASH || '34d094e6f9dd5d7d79fbef5e60b3f176:e7f745b602491e7455af4f69e12691a97836cc704f9e8efbba9b68d0f0520ae9';
 const SECRET = process.env.TOKEN_SECRET || crypto.createHash('sha256').update('arcade-dev|' + HASH).digest('hex');
 const MAX_ZIP = 4 * 1024 * 1024, MAX_HTML = 1536 * 1024, MAX_FILES = 40, MAX_FILE = 3 * 1024 * 1024, MAX_TOTAL = 8 * 1024 * 1024, PENDING_MS = 30 * 60e3, KEEP_HIST = 5;
@@ -117,14 +117,38 @@ function checkApp(html) {
   return +m[1];
 }
 
-// ---- email to the owner (sent from the server, so the uploader never sees the link) ----
+// ---- email to the owner (the uploader never receives the approval link) ----
+function mailConfiguration() {
+  const keyReady = !!process.env.RESEND_API_KEY;
+  const recipientReady = !!process.env.OWNER_EMAIL;
+  const sender = String(process.env.MAIL_FROM || '').trim();
+  const senderAddress = (sender.match(/<([^<>]+)>/) || [])[1] || sender;
+  const senderIsResendTest = !sender || /@resend\.dev$/i.test(senderAddress);
+  const senderLooksValid = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(senderAddress);
+  const customSenderReady = senderLooksValid && !senderIsResendTest;
+  const mailReady = keyReady && recipientReady;
+  const mailSetupHint = !keyReady || !recipientReady
+    ? 'Add RESEND_API_KEY and OWNER_EMAIL in Netlify Production environment variables.'
+    : (customSenderReady
+      ? 'A custom sender is configured. Confirm that its domain is verified in Resend.'
+      : 'Resend shared test sender is in use. For reliable approval delivery, verify a domain you control in Resend and set MAIL_FROM to an address on that domain.');
+  return { mailReady, mailSenderReady: customSenderReady, mailMode: customSenderReady ? 'custom-sender' : (mailReady ? 'resend-test-sender' : 'not-configured'), mailSetupHint };
+}
 async function mailOwner(subject, html, text) {
   const key = process.env.RESEND_API_KEY, to = process.env.OWNER_EMAIL;
   if (!key || !to) return { ok: false, why: 'not_configured' };
+  const from = String(process.env.MAIL_FROM || 'Arcade Tracker <onboarding@resend.dev>').trim();
   try {
-    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.MAIL_FROM || 'Arcade Tracker <onboarding@resend.dev>', to: [to], subject, html, text }) });
-    return r.ok ? { ok: true } : { ok: false, why: 'send_failed' };
-  } catch { return { ok: false, why: 'send_failed' }; }
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: JSON.stringify({ from, to: [to], subject, html, text }) });
+    if (r.ok) return { ok: true };
+    const response = await r.json().catch(() => ({}));
+    const detail = String(response.message || response.error || response.name || '').slice(0, 220);
+    console.warn('[release-email] Resend rejected approval mail', r.status, detail);
+    return { ok: false, why: r.status === 403 ? 'sender_not_authorized' : 'send_failed', status: r.status, detail };
+  } catch (error) {
+    console.warn('[release-email] Resend request failed', String(error && error.message || error).slice(0, 180));
+    return { ok: false, why: 'network_error' };
+  }
 }
 const baseUrl = e => (process.env.URL || '').replace(/\/$/, '') || 'https://' + ((e.headers || {})['x-forwarded-host'] || (e.headers || {}).host || 'localhost');
 const when = t => new Date(t).toUTCString();
@@ -168,7 +192,7 @@ exports.handler = async e => {
     if (method === 'GET' && q.m === 'health') {
       if (!c) return J(503, { ok: false, service: 'release', storageReady: false, baseBuild: BASE_BUILD, error: 'Netlify Blobs context is missing. Confirm this function is deployed on the Netlify site.' });
       const act = await bget(c, 'active');
-      return J(200, { ok: true, service: 'release', storageReady: true, mailReady: !!(process.env.RESEND_API_KEY && process.env.OWNER_EMAIL), baseBuild: BASE_BUILD, active: act ? { id: act.id, build: +act.build, label: act.label || '' } : null, activeServed: !!(act && +act.build > BASE_BUILD), checkedAt: now });
+      return J(200, Object.assign({ ok: true, service: 'release', storageReady: true, baseBuild: BASE_BUILD, active: act ? { id: act.id, build: +act.build, label: act.label || '' } : null, activeServed: !!(act && +act.build > BASE_BUILD), checkedAt: now }, mailConfiguration()));
     }
     if (!c) return method === 'GET' ? page(503, 'Not available', '<h1>Not available</h1><p>Storage is not available right now.</p>') : J(503, { ok: false, error: 'Netlify storage is not available to this function yet.' });
 
@@ -198,13 +222,22 @@ exports.handler = async e => {
     // ---- developer actions (need the developer token) ----
     let b = {}; try { b = JSON.parse(e.body || '{}'); } catch { return J(400, { ok: false }); }
     if (!tokenOk(e.headers)) return J(401, { ok: false, error: 'Please log in again.' });
-    const mailReady = !!(process.env.RESEND_API_KEY && process.env.OWNER_EMAIL);
+    const mailConfig = mailConfiguration(), mailReady = mailConfig.mailReady;
 
     if (b.action === 'status') {
       const act = await bget(c, 'active'), p = await bget(c, 'pending'), hist = (await bget(c, 'hist')) || [];
       const pub = r => r && { id: r.id, label: r.label, build: +r.build, approved: r.approved, uploaded: r.uploaded };
       const floor = Math.max(BASE_BUILD, act ? +act.build || 0 : 0);
-      return J(200, { ok: true, storageReady: true, mailReady, baseBuild: BASE_BUILD, nextBuild: floor + 1, activeServed: !!(act && +act.build > BASE_BUILD), active: pub(act), pending: p && now <= p.exp ? { id: p.id, label: p.label, build: p.build, ts: p.ts, exp: p.exp } : null, hist: hist.map(pub) });
+      return J(200, Object.assign({ ok: true, storageReady: true, baseBuild: BASE_BUILD, nextBuild: floor + 1, activeServed: !!(act && +act.build > BASE_BUILD), active: pub(act), pending: p && now <= p.exp ? { id: p.id, label: p.label, build: p.build, ts: p.ts, exp: p.exp } : null, hist: hist.map(pub) }, mailConfig));
+    }
+    if (b.action === 'test-email') {
+      const testHits = (mem.hits['mail-test-' + ip] = (mem.hits['mail-test-' + ip] || []).filter(x => now - x < 10 * 60e3));
+      if (testHits.length >= 2) return J(429, { ok: false, error: 'Email test limit reached. Try again in ten minutes.' });
+      if (!mailReady) return J(503, { ok: false, error: mailConfig.mailSetupHint });
+      testHits.push(now);
+      const sent = await mailOwner('Arcade Tracker · email approval test', '<p>This is a test from Arcade Journey Tracker.</p><p>Your hot-update approval emails are being sent through this configured Resend account.</p><p>No application update was uploaded or published by this test.</p>', 'This is a test from Arcade Journey Tracker. No application update was uploaded or published by this test.');
+      if (!sent.ok) return J(502, { ok: false, error: sent.why === 'sender_not_authorized' ? 'Resend rejected the sender. Verify the sending domain in Resend and set MAIL_FROM in Netlify.' : 'Resend could not send the test email. Check Resend Logs and Netlify function logs.', providerStatus: sent.status || null, senderHint: mailConfig.mailSetupHint });
+      return J(200, { ok: true, message: 'Resend accepted the test email for delivery to OWNER_EMAIL. Check your inbox and spam folder.', mailMode: mailConfig.mailMode, mailSenderReady: mailConfig.mailSenderReady });
     }
     if (b.action === 'cancel') { const p = await bget(c, 'pending'); if (p) { await delFiles(c, p); await bdel(c, 'pending'); } return J(200, { ok: true }); }
     if (b.action === 'disable') { const act = await bget(c, 'active'); if (act) { const hist = (await bget(c, 'hist')) || []; const keep = [act, ...hist.filter(x => x.id !== act.id)].slice(0, KEEP_HIST); await bset(c, 'hist', keep); await bdel(c, 'active'); } return J(200, { ok: true }); }
@@ -224,7 +257,7 @@ exports.handler = async e => {
       return J(200, { ok: true, deleted: 'history' });
     }
     if (b.action === 'upload') {
-      if (!mailReady) return J(503, { ok: false, error: 'Email approval is not set up yet, so uploads are blocked. Add RESEND_API_KEY and OWNER_EMAIL in Netlify (see SETUP_HOT_UPDATES.md).' });
+      if (!mailReady) return J(503, { ok: false, error: mailConfig.mailSetupHint });
       const lim = ((await bget(c, 'lim')) || []).filter(t => now - t < 3600e3);
       if (lim.length >= 5) return J(429, { ok: false, error: 'Too many uploads this hour. Try again later.' });
       let files, build, hashInput;
@@ -248,12 +281,20 @@ exports.handler = async e => {
       const id = now.toString(36) + crypto.randomBytes(3).toString('hex'), token = crypto.randomBytes(32).toString('hex'), meta = [];
       for (let i = 0; i < files.length; i++) { const ext = files[i].p.split('.').pop().toLowerCase(); await bset(c, `f-${id}-${i}`, { ct: EXT[ext], b64: files[i].data.toString('base64') }); meta.push({ p: files[i].p, n: files[i].data.length, i }); }
       const label = String(b.label || '').trim().slice(0, 60), pend = { id, label, build, ts: now, exp: now + PENDING_MS, ip, hash: sha(hashInput), files: meta, tokHash: sha(token) };
+      // Persist pending metadata BEFORE sending mail so an owner who opens the
+      // email immediately cannot race the pending-record write.
+      await bset(c, 'pending', pend);
       const link = `${baseUrl(e)}/api/release?m=approve&t=${token}`;
       const html = `<div style="font-family:system-ui,sans-serif;max-width:520px"><h2>Approve a site update?</h2><p>The developer panel just uploaded a new version of the Arcade Tracker (<b>${esc(label || 'no label')}</b>, build ${build}). It goes live only if you approve it.</p><p><a href="${link}" style="display:inline-block;background:#e8710a;color:#fff;padding:12px 18px;border-radius:12px;text-decoration:none;font-weight:700">Review and approve</a></p><p style="font-size:13px;color:#555">Uploaded ${esc(when(now))} from IP ${esc(ip)}. The link works once and expires in 30 minutes. If this was not you, ignore this email (nothing will be published) and change your developer password.</p></div>`;
       const text = `Approve a site update? Label: ${label || 'none'}, build ${build}. Review and approve: ${link}\nUploaded ${when(now)} from IP ${ip}. The link works once and expires in 30 minutes. If this was not you, ignore this email and change your developer password.`;
       const sent = await mailOwner('Approve a site update for Arcade Tracker', html, text);
-      if (!sent.ok) { for (const f of meta) await bdel(c, `f-${id}-${f.i}`); return J(502, { ok: false, error: 'The approval email could not be sent, so the update was discarded. Nothing was published.' }); }
-      await bset(c, 'pending', pend); lim.push(now); await bset(c, 'lim', lim);
+      if (!sent.ok) {
+        await bdel(c, 'pending');
+        for (const f of meta) await bdel(c, `f-${id}-${f.i}`);
+        const hint = sent.why === 'sender_not_authorized' ? 'Resend rejected the sender. Verify your sending domain and set MAIL_FROM in Netlify.' : 'Check Resend Logs and Netlify function logs.';
+        return J(502, { ok: false, error: 'The approval email could not be sent, so the update was discarded. Nothing was published. ' + hint, providerStatus: sent.status || null });
+      }
+      lim.push(now); await bset(c, 'lim', lim);
       return J(200, { ok: true, id, build, expiresMin: 30 });     // the approval link is never returned to the browser
     }
     return J(400, { ok: false, error: 'Unknown release action. Badge catalogue and keyword updates use the community service endpoint.' });

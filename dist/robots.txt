@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /app-builtin.html
+
+Sitemap: https://google-arcade-point-calculator.netlify.app/sitemap.xml

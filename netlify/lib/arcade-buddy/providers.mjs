@@ -1,5 +1,5 @@
-const INTELLIGENCE_FEED_URL =
-  "https://raw.githubusercontent.com/SubratNexus/arcade-intelligence-2.0/main/agent-data/public-feed.json";
+const APPROVED_KNOWLEDGE_URL =
+  "https://raw.githubusercontent.com/SubratNexus/arcade-intelligence-2.0/main/agent-data/approved-knowledge.json";
 
 const CHANNELS = [
   { name: "Google Cloud Tech", id: "UCJS9pqu9BzkAMNTmzNMNhvg" },
@@ -179,55 +179,120 @@ export async function readIntelligenceFeed({ fetchImpl = globalThis.fetch, feedD
   try {
     let data = feedData;
     if (!data) {
-      const body = await getText(INTELLIGENCE_FEED_URL, {
+      const body = await getText(APPROVED_KNOWLEDGE_URL, {
         fetchImpl, timeoutMs: 8500, maxChars: 500_000,
         headers: { Accept: "application/json" }
       });
       data = JSON.parse(body);
     }
-    if (!data || !Array.isArray(data.programme_events)) throw new Error("UNSUPPORTED_INTELLIGENCE_FEED");
-    const results = data.programme_events.slice(0, 100).map((event) => {
-      const trustedSources = Array.isArray(event.sources) ? event.sources.filter((source) => {
-        if (!source || source.source_type !== "google_cloud_community" ||
-            source.source_domain !== "discuss.google.dev" ||
-            source.is_google_staff_author !== true ||
-            source.publisher_authority !== "google_staff_group" ||
-            source.author_verification_method !== "discourse_google_staff_group") return false;
-        try {
-          const url = new URL(source.source_url);
-          return url.protocol === "https:" && url.hostname === "discuss.google.dev" &&
-            url.pathname.startsWith("/t/") && !url.username && !url.password;
-        } catch { return false; }
-      }) : [];
-      const trustedUrl = trustedSources[0]?.source_url || "";
-      const isOfficial = event.verification_status === "officially_announced" && !!trustedUrl;
-      const rawUrls = Array.isArray(event.source_urls) ? event.source_urls : [];
-      const urls = rawUrls.filter((value) => {
-        try { const u = new URL(value); return u.protocol === "https:" && !u.username && !u.password; }
-        catch { return false; }
-      });
-      const link = isOfficial ? trustedUrl : (urls[0] || "https://discuss.google.dev/c/google-cloud/cloud-announcements/172");
-      return {
-        title: String(event.title || "Arcade programme update"),
-        url: link,
-        snippet: [
-          event.verification_explanation || "",
-          Array.isArray(event.explicit_point_mentions) ? event.explicit_point_mentions.join("; ") : "",
-          Array.isArray(event.tier_mentions) ? "Tier mentions: " + event.tier_mentions.join(", ") : "",
-          event.human_review_required !== false ? "Human review is still pending; this is not a verified participant opportunity." : "",
-          "Review: " + String(event.review_decision || "pending")
-        ].filter(Boolean).join(" "),
-        publishedAt: event.published_at || null,
-        publisher: "Google Cloud Community",
-        sourceType: "intelligence_repository",
-        verificationStatus: isOfficial ? "officially_announced" : String(event.verification_status || "unverified"),
-        officialSourceMetadata: isOfficial,
-        humanReviewRequired: event.human_review_required !== false
-      };
-    });
-    return { results, status: "success", generatedAt: data.generated_at || null };
+    if (!data || !Array.isArray(data.items) || data.initialization_status !== "initialized") {
+      throw new Error("UNSUPPORTED_APPROVED_KNOWLEDGE_DATABASE");
+    }
+
+    const results = [];
+    const allowedBadgeHosts = new Set(["skills.google", "www.skills.google", "cloudskillsboost.google", "www.cloudskillsboost.google"]);
+    const approved = data.items.slice(0, 500).filter((item) =>
+      item && typeof item === "object" && typeof item.entity_id === "string" &&
+      item.record && typeof item.record === "object" && item.approved_at &&
+      item.approval_method
+    );
+
+    for (const item of approved) {
+      const record = item.record;
+      const title = String(item.title || record.title || "").replace(/\s+/g, " ").trim().slice(0, 180);
+      if (!title) continue;
+      const type = String(item.entity_type || "");
+
+      if (type === "programme_event") {
+        const trustedSources = Array.isArray(record.sources) ? record.sources.filter((source) => {
+          if (!source || source.source_type !== "google_cloud_community" ||
+              source.source_domain !== "discuss.google.dev" || source.is_google_staff_author !== true ||
+              source.publisher_authority !== "google_staff_group" ||
+              source.author_verification_method !== "discourse_google_staff_group") return false;
+          try {
+            const url = new URL(source.source_url);
+            return url.protocol === "https:" && url.hostname === "discuss.google.dev" &&
+              url.pathname.startsWith("/t/") && !url.username && !url.password;
+          } catch { return false; }
+        }) : [];
+        const trustedUrl = trustedSources[0]?.source_url || "";
+        const isOfficial = record.verification_status === "officially_announced" && !!trustedUrl;
+        const fallbackUrl = Array.isArray(record.source_urls)
+          ? record.source_urls.map(safeHttps).find(Boolean) : "";
+        const url = trustedUrl || fallbackUrl;
+        if (!url) continue;
+        results.push({
+          title, url,
+          snippet: [
+            record.verification_explanation || record.evidence || "",
+            Array.isArray(record.explicit_point_mentions) ? record.explicit_point_mentions.join("; ") : "",
+            Array.isArray(record.tier_mentions) ? "Tier mentions: " + record.tier_mentions.join(", ") : "",
+            "This record is present in the owner's approved-knowledge database.",
+            "Confirm dates, availability, eligibility and exact point rules on the original source."
+          ].filter(Boolean).join(" "),
+          publishedAt: record.published_at || null,
+          publisher: isOfficial ? "Google Cloud Community" : "Arcade Intelligence approved knowledge",
+          sourceType: "intelligence_repository",
+          verificationStatus: isOfficial ? "officially_announced" : String(record.verification_status || "owner_approved_record"),
+          officialSourceMetadata: isOfficial,
+          humanReviewRequired: false,
+          ownerApproved: true
+        });
+        continue;
+      }
+
+      if (["skill_badge", "arcade_game", "completion_badge"].includes(type)) {
+        const rawUrl = record.source_url || record.badge_url || item.source_url;
+        const url = safeHttps(rawUrl);
+        if (!url) continue;
+        let parsed;
+        try { parsed = new URL(url); } catch { continue; }
+        if (!allowedBadgeHosts.has(parsed.hostname)) continue;
+        const point = record.point_value ?? record.pointValue;
+        results.push({
+          title, url,
+          snippet: [
+            "Owner-approved " + type.replace(/_/g, " ") + " record.",
+            record.evidence || "",
+            point !== null && point !== undefined && Number.isFinite(Number(point)) ? "Recorded point value: " + String(point) + "." : "No point value is recorded.",
+            record.availability_confirmed === true ? "The record says availability was confirmed when observed; re-check current availability." : "Current availability and eligibility are not guaranteed."
+          ].filter(Boolean).join(" "),
+          publishedAt: record.last_seen || record.lastSeen || item.approved_at,
+          publisher: "Arcade Intelligence approved catalogue",
+          sourceType: "intelligence_catalogue",
+          verificationStatus: "owner_approved_catalogue",
+          ownerApproved: true
+        });
+        continue;
+      }
+
+      if (type === "youtube_video") {
+        const url = safeHttps(record.source_url || item.source_url);
+        if (!url) continue;
+        let parsed;
+        try { parsed = new URL(url); } catch { continue; }
+        if (!['youtube.com', 'www.youtube.com', 'youtu.be'].includes(parsed.hostname)) continue;
+        results.push({
+          title, url,
+          snippet: "Owner-approved public video observation. Video metadata is not an official confirmation of programme rules or eligibility.",
+          publishedAt: record.published_at || item.approved_at,
+          publisher: "Approved public video observation",
+          sourceType: "youtube",
+          verificationStatus: "owner_approved_video_observation",
+          ownerApproved: true
+        });
+      }
+    }
+
+    return {
+      results: results.slice(0, 120),
+      status: "success",
+      generatedAt: data.updated_at || data.initialized_at || null,
+      knowledgeVersion: data.knowledge_version || null,
+      approvedKnowledgeCount: approved.length
+    };
   } catch (error) {
-    return { results: [], status: "unavailable", failures: [String(error?.message || "INTELLIGENCE_FEED_UNAVAILABLE").slice(0, 100)] };
+    return { results: [], status: "unavailable", failures: [String(error?.message || "APPROVED_KNOWLEDGE_UNAVAILABLE").slice(0, 100)] };
   }
 }
 

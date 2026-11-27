@@ -42,6 +42,20 @@ export function classifyEvidence(item = {}) {
       verificationNote: "Channel ownership does not by itself confirm a programme-specific announcement."
     };
   }
+  if (item.sourceType === "intelligence_catalogue") {
+    return {
+      evidenceClass: "catalogue_evidence",
+      label: "Badge catalogue record (repository-verified page evidence)",
+      verificationNote: "The catalogue record is a research lead. It does not prove that an activity is currently available, that this user is eligible, or that it awards points."
+    };
+  }
+  if (item.sourceType === "intelligence_change") {
+    return {
+      evidenceClass: "repository_observation",
+      label: "Intelligence repository change record",
+      verificationNote: "This records a detected catalogue or programme-feed change; check the linked original source for current details."
+    };
+  }
 
   let hostname = "";
   try { hostname = new URL(item.url).hostname.toLowerCase(); } catch { /* rejected later */ }
@@ -98,6 +112,8 @@ export function normalizeEvidence(items = []) {
     community_report: 2,
     news_discovery: 3,
     official_channel_metadata: 4,
+    catalogue_evidence: 4,
+    repository_observation: 4,
     unverified_search_result: 5
   };
   normalized.sort((a, b) => {

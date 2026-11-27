@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildResearchPlan, classifyTask, redactSearchText, resolveFollowUp } from "../netlify/lib/arcade-buddy/planner.mjs";
+import { buildResearchPlan, classifyTask, redactSearchText, resolveFollowUp, requiresResearch } from "../netlify/lib/arcade-buddy/planner.mjs";
 import { calculateStrategy } from "../netlify/lib/arcade-buddy/strategy.mjs";
 import { normalizeEvidence } from "../netlify/lib/arcade-buddy/evidence.mjs";
 import { parseBingRss, parseGoogleNewsRss } from "../netlify/lib/arcade-buddy/providers.mjs";
@@ -24,8 +24,11 @@ test("planner keeps general evergreen questions broad", () => {
   assert.equal(classifyTask("Explain how a solar eclipse works."), "general_research");
 });
 
-test("strategy question activates deterministic calculation", () => {
+test("strategy question activates deterministic calculation and live research for Arcade plans", () => {
   assert.equal(classifyTask("How can I reach 20 points by the programme end?"), "strategy");
+  assert.equal(requiresResearch("How can I earn 20 more Arcade points?"), true);
+  assert.equal(requiresResearch("Build my personalised Arcade plan"), true);
+  assert.equal(requiresResearch("How many points do I currently have?"), false);
 });
 
 test("follow-up keeps previous topic", () => {
@@ -149,13 +152,17 @@ test("repository official label rejects an untrusted host even with trusted meta
 });
 
 test("research uses the supplied intelligence feed without another network fetch", async () => {
-  const feedData = { generated_at: "2026-11-27T00:00:00Z", programme_events: [{
-    title: "Google Skills Arcade update", published_at: "2026-11-26T00:00:00Z",
-    verification_status: "officially_announced", human_review_required: true,
-    source_urls: ["https://discuss.google.dev/t/example/123"],
-    sources: [{ source_type: "google_cloud_community", source_domain: "discuss.google.dev",
-      source_url: "https://discuss.google.dev/t/example/123", is_google_staff_author: true,
-      publisher_authority: "google_staff_group", author_verification_method: "discourse_google_staff_group" }]
+  const feedData = { schema_version: 1, initialization_status: "initialized", updated_at: "2026-11-27T00:00:00Z", knowledge_version: "approved-unit-v1", items: [{
+    entity_type: "programme_event", entity_id: "programme_event:event-1", title: "Google Skills Arcade update",
+    approved_at: "2026-11-27T00:00:00Z", approved_by: "owner_email_review", approval_method: "explicit_per_item_confirmation",
+    record: {
+      event_id: "event-1", title: "Google Skills Arcade update", published_at: "2026-11-26T00:00:00Z",
+      verification_status: "officially_announced", human_review_required: false, notification_approved: true,
+      source_urls: ["https://discuss.google.dev/t/example/123"],
+      sources: [{ source_type: "google_cloud_community", source_domain: "discuss.google.dev",
+        source_url: "https://discuss.google.dev/t/example/123", is_google_staff_author: true,
+        publisher_authority: "google_staff_group", author_verification_method: "discourse_google_staff_group" }]
+    }
   }] };
   const result = await answerQuestion({ question: "Any new Arcade event today?", timezone: "Asia/Kolkata" }, {
     now: new Date("2026-11-27T00:00:00Z"), feedData,
@@ -168,4 +175,35 @@ test("research uses the supplied intelligence feed without another network fetch
   });
   assert.ok(result.evidence.some((item) => item.evidenceClass === "official_announcement"));
   assert.equal("providerStatus" in result, false);
+});
+
+
+test("ordinary questions do not run unrelated background research", async () => {
+  let calls = 0;
+  const empty = async () => { calls++; return { status: "success", results: [] }; };
+  const result = await answerQuestion({ question: "How does photosynthesis work?", history: [], timezone: "Asia/Kolkata" }, {
+    now: new Date("2026-11-27T00:00:00Z"),
+    providers: { searchWeb: empty, searchGoogleNews: empty, searchCommunity: empty, readIntelligenceFeed: empty, searchYouTube: empty }
+  });
+  assert.equal(result.requiresResearch, false);
+  assert.equal(result.showSources, false);
+  assert.equal(result.evidence.length, 0);
+  assert.equal(result.answer, "");
+  assert.equal(calls, 0, "no search provider should run for an ordinary question");
+});
+
+test("explicit research requests with no matching search result give a specific no-match response", async () => {
+  const result = await answerQuestion({ question: "Search the web for the history of an obscure fictional telescope model ZQ-991.", history: [], timezone: "Asia/Kolkata" }, {
+    now: new Date("2026-11-27T00:00:00Z"),
+    providers: {
+      searchWeb: async () => ({ status: "success", results: [{ title: "Unrelated gardening guide", url: "https://example.org/gardening", snippet: "A guide to growing tomatoes." }] }),
+      searchGoogleNews: async () => ({ results: [] }),
+      searchCommunity: async () => ({ results: [] }),
+      readIntelligenceFeed: async () => ({ results: [] }),
+      searchYouTube: async () => ({ results: [] })
+    }
+  });
+  assert.match(result.answer, /did not closely match the main terms/i);
+  assert.match(result.answer, /specific name, product, place, date/i);
+  assert.doesNotMatch(result.answer, /current estimate is .* Arcade points/i);
 });

@@ -23,6 +23,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/profile-data"
+  to = "/.netlify/functions/profile-data"
+  status = 200
+
+[[redirects]]
   from = "/api/seasons"
   to = "/.netlify/functions/seasons"
   status = 200
@@ -42,7 +47,8 @@
   to = "/.netlify/functions/intelligence"
   status = 200
 
-# Separate owner-review endpoint. It does not use or modify /api/release.
+# Individual owner approval/rejection for the separate Arcade Intelligence agent.
+# Does not replace or alter the Hot Update Manager at /api/release.
 [[redirects]]
   from = "/api/agent-review"
   to = "/.netlify/functions/agent-review"
@@ -57,7 +63,7 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
     # Restricts external script/frame/form sources while retaining the inline scripts the app needs. Disable the official Netlify badge in the project settings.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.web3forms.com https://raw.githubusercontent.com; media-src 'self' https: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://api.web3forms.com; frame-ancestors 'self'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://esm.run https://cdn.jsdelivr.net; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://api.web3forms.com https://raw.githubusercontent.com https://esm.run https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://*.hf.co https://*.xethub.hf.co; media-src 'self' https: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://api.web3forms.com; frame-ancestors 'self'"
 
 [[headers]]
   for = "/api/*"

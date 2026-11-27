@@ -4,7 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const api = require('../netlify/functions/intelligence.js');
 const t = api._test;
-
+const safeTaskPlan = t.sanitiseTaskPlan({taskType:'current_news',tools:['web','intelligence','evil','https://attacker.example']});
+assert.deepStrictEqual(safeTaskPlan.tools, ['web','intelligence']);
+assert.strictEqual(t.safeKnowledgeUrl('https://www.skills.google/course_templates/123').startsWith('https://www.skills.google/'), true);
+assert.strictEqual(t.safeKnowledgeUrl('https://attacker.example/fake'), '');
 const profile = t.sanitiseProfile({
   currentPoints: 86.5,
   currentTier: 'Ranger',
@@ -29,6 +32,11 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(profile, 'email'), false
 assert.strictEqual(Object.prototype.hasOwnProperty.call(profile, 'profileUrl'), false);
 assert.strictEqual(Object.prototype.hasOwnProperty.call(profile, 'name'), false);
 assert.strictEqual(profile.focus, 'skills');
+
+const context = t.sanitiseCalculatorContext({rules:{version:'test',year:2026,pointValues:{game:1,trivia:1,special:2,skill:0.5},tiers:[{n:'Ranger',min:75}]},totals:{counts:{games:2,skills:3},pointBreakdown:{game:2,skill:1.5}},earnedBadgeTitles:['A']},profile);
+assert.strictEqual(context.totals.currentPoints, profile.currentPoints);
+assert.strictEqual(context.rules.pointValues.skill, 0.5);
+
 const requestedAdditional = t.applyQuestionGoal({ ...profile }, 'How can I achieve 20 points till the programme end?');
 assert.strictEqual(requestedAdditional.targetPoints, 106.5);
 assert.strictEqual(requestedAdditional.pointsRemaining, 20);
@@ -75,6 +83,7 @@ const skillAnswer = t.fallbackPlan(profile, { programme_events: [], youtube_vide
 assert.match(skillAnswer, /Kubernetes Basics/);
 const newsAnswer = t.fallbackPlan(profile, { programme_events: [pending], youtube_videos: [] }, 'Any new announcements or events?');
 assert.match(newsAnswer, /awaiting human review/);
+assert.doesNotMatch(newsAnswer, /Your current estimate is/, 'announcement replies should not repeat personal points boilerplate');
 const videoAnswer = t.fallbackPlan(profile, { programme_events: [], youtube_videos: [] }, 'Show me new YouTube videos');
 assert.match(videoAnswer, /no matching videos in the public intelligence feed/);
 assert.doesNotMatch(fallback, /You are guaranteed/);
@@ -92,19 +101,40 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
       const requested = String(url);
       fetchCalls.push(requested);
       if (requested.startsWith('https://raw.githubusercontent.com/SubratNexus/arcade-intelligence-2.0/')) {
-        return {
-          ok: true,
-          text: async () => JSON.stringify({
-            schema_version: 1,
-            generated_at: '2026-11-27T00:00:00Z',
-            programme_events: [pending],
-            youtube_videos: [],
-          }),
-        };
+        let payload;
+        if (requested.endsWith('/approved-knowledge.json')) {
+          payload = {
+            schema_version: 1, initialization_status: 'initialized', updated_at: '2026-11-27T00:00:00Z',
+            knowledge_version: 'approved-test-v1',
+            items: [
+              { entity_type: 'programme_event', entity_id: 'programme_event:approved-1', title: good.title,
+                record: good, digest: 'event-digest', source_url: trusted.source_url,
+                approved_at: '2026-11-27T00:00:00Z', approved_by: 'owner_email_review', approval_method: 'explicit_per_item_confirmation' },
+              { entity_type: 'skill_badge', entity_id: 'skill_badge:kubernetes', title: 'Kubernetes Basics',
+                record: { title: 'Kubernetes Basics', category: 'skill', source_url: 'https://www.skills.google/course_templates/123',
+                  evidence: 'Explicit visible SKILL BADGE label', point_value: 0.5, verified: true },
+                digest: 'skill-digest', source_url: 'https://www.skills.google/course_templates/123',
+                approved_at: '2026-11-27T00:00:00Z', approved_by: 'owner_email_review', approval_method: 'explicit_per_item_confirmation' }
+            ]
+          };
+        } else if (requested.endsWith('/catalogue.json')) {
+          payload = {
+            schema_version: 1, version: '1.1.0', status: 'ok', last_run_at: '2026-11-27T00:00:00Z',
+            entries: [{title:'Kubernetes Basics', category:'skill', verified:true, status:'active', source_url:'https://www.skills.google/course_templates/123', evidence:'Explicit visible SKILL BADGE label'}],
+            game_entries: [], completion_badges: [], candidates: [{title:'Unresolved badge lead', category:'unknown', source_url:'https://www.skills.google/course_templates/456', confidence:0.4, evidence:'Needs review'}],
+            stats: {pages_crawled:15, verified_skill_badges:1, verified_game_badges:0, verified_completion_badges:0, pending_candidates:1, page_errors:0}
+          };
+        } else {
+          payload = { schema_version: 1, generated_at: '2026-11-27T00:00:00Z', knowledge_version:'feed-test-1', programme_events: [pending], youtube_videos: [] };
+        }
+        return { ok: true, text: async () => JSON.stringify(payload) };
       }
       // Public research providers receive only the user question, never dashboard identifiers or personal profile data.
       assert.doesNotMatch(decodeURIComponent(requested), /private@example\.test|private\.example|Private Name/);
       if (requested.startsWith('https://www.bing.com/search?')) {
+        if (/photosynthesis/i.test(requested)) {
+          return { ok: true, text: async () => '<rss><channel><item><title>Photosynthesis: how plants make food</title><link>https://example.org/photosynthesis</link><description>Photosynthesis converts sunlight, water and carbon dioxide into sugars and oxygen.</description><pubDate>Fri, 27 Nov 2026 00:00:00 GMT</pubDate></item></channel></rss>' };
+        }
         return { ok: true, text: async () => '<rss><channel><item><title>General search lead</title><link>https://example.org/search-lead</link><description>Unverified web result</description><pubDate>Fri, 27 Nov 2026 00:00:00 GMT</pubDate></item></channel></rss>' };
       }
       if (requested.startsWith('https://news.google.com/rss/search?')) {
@@ -131,7 +161,7 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
       headers: { 'x-nf-client-connection-ip': 'rule-agent-test-818' },
       body: JSON.stringify({
         action: 'plan',
-        message: 'Make my plan',
+        message: 'Build my personalised Arcade plan',
         profile: {
           currentPoints: 86.5,
           targetPoints: 95,
@@ -146,11 +176,17 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     const response = await api.handler(event);
     assert.strictEqual(response.statusCode, 200);
     const payload = JSON.parse(response.body);
-    assert.strictEqual(payload.source, 'background-research+rule-based');
+    assert.strictEqual(payload.source, 'background-research+calculator-context');
     assert.strictEqual(payload.externalAi, false);
     assert.match(payload.reply, /Kubernetes Basics/);
-    assert.strictEqual(payload.feed.pendingReviewCount, 1);
-    assert.strictEqual(fetchCalls.filter(url => url.startsWith('https://raw.githubusercontent.com/')).length, 1, 'planning fetches the public feed once');
+    assert.strictEqual(payload.feed.pendingReviewCount, 0, 'chatbot feed must not expose pending review proposals');
+    assert.strictEqual(payload.feed.knowledgeVersion, 'approved-test-v1');
+    assert.ok(payload.feed.skillBadges.some(item => item.title === 'Kubernetes Basics'));
+    assert.strictEqual(payload.feed.unresolvedCandidates.length, 0, 'unapproved candidate records must stay out of the chatbot context');
+    assert.ok(payload.agentContext.calculator && payload.agentContext.today);
+    assert.strictEqual(fetchCalls.filter(url => url.endsWith('/approved-knowledge.json')).length, 1, 'chat planning fetches the approved-only knowledge database');
+    assert.strictEqual(fetchCalls.filter(url => url.endsWith('/public-feed.json')).length, 0, 'chat planning must not fetch the public discovery feed');
+    assert.strictEqual(fetchCalls.filter(url => url.endsWith('/catalogue.json')).length, 0, 'chat planning must not fetch the unreviewed catalogue');
     assert.ok(fetchCalls.some(url => url.startsWith('https://www.bing.com/search?')), 'planning performs background web research');
     assert.doesNotMatch(response.body, /private@example\.test|private\.example\/profile|Private Name/);
 
@@ -168,7 +204,7 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     });
     assert.strictEqual(researchResponse.statusCode, 200);
     const researchPayload = JSON.parse(researchResponse.body);
-    assert.strictEqual(researchPayload.source, 'background-research');
+    assert.strictEqual(researchPayload.source, 'background-research+calculator-context');
     assert.ok(researchPayload.evidence.some(item => item.evidenceClass === 'official_announcement'));
     assert.ok(researchPayload.evidence.some(item => item.evidenceClass === 'community_report'));
     assert.ok(researchPayload.evidence.some(item => item.evidenceClass === 'news_discovery'));
@@ -178,9 +214,35 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
     assert.ok(fetchCalls.some(url => url.startsWith('https://discuss.google.dev/search.json?')));
     assert.ok(fetchCalls.some(url => url.startsWith('https://www.youtube.com/feeds/videos.xml?')));
 
+    const generalResponse = await api.handler({
+      httpMethod: 'POST',
+      headers: { 'x-nf-client-connection-ip': 'general-question-integration-test' },
+      body: JSON.stringify({ action: 'plan', message: 'How does photosynthesis work?', profile: {}, history: [], timezone: 'Asia/Kolkata' }),
+    });
+    assert.strictEqual(generalResponse.statusCode, 200);
+    const generalPayload = JSON.parse(generalResponse.body);
+    assert.strictEqual(generalPayload.source, 'background-research+calculator-context');
+    assert.match(generalPayload.reply, /Gemini AI is not configured/i);
+    assert.strictEqual(generalPayload.evidence.length, 0);
+    assert.strictEqual(generalPayload.showSources, false);
+    assert.strictEqual(generalPayload.feedWarning, null);
+    assert.doesNotMatch(generalPayload.reply, /Arcade updates|source links|news roundup/i);
+    assert.ok(!fetchCalls.some(url => url.startsWith('https://www.bing.com/search?') && /photosynthesis/i.test(url)), 'ordinary questions must not trigger unrelated web search');
+
+    const unrelatedPlanResponse = await api.handler({
+      httpMethod: 'POST',
+      headers: { 'x-nf-client-connection-ip': 'unrelated-study-plan-integration-test' },
+      body: JSON.stringify({ action: 'plan', message: 'Help me make a study plan for organic chemistry', profile: {}, history: [], timezone: 'Asia/Kolkata' }),
+    });
+    assert.strictEqual(unrelatedPlanResponse.statusCode, 200);
+    assert.strictEqual(JSON.parse(unrelatedPlanResponse.body).source, 'background-research+calculator-context');
+    assert.match(JSON.parse(unrelatedPlanResponse.body).reply, /Gemini AI is not configured/i);
+    assert.strictEqual(JSON.parse(unrelatedPlanResponse.body).evidence.length, 0);
+
     const feedResponse = await api.handler({ httpMethod: 'GET', queryStringParameters: { m: 'feed' }, headers: {} });
     assert.strictEqual(feedResponse.statusCode, 200);
     assert.strictEqual(JSON.parse(feedResponse.body).feed.programmeEvents.length, 1);
+    assert.strictEqual(fetchCalls.filter(url => url.endsWith('/public-feed.json')).length, 1, 'the separate public feed view can still read discovery observations');
 
     const rateTestIp = 'rate-limit-rule-agent-test-818';
     for (let i = 0; i < 2; i++) {
@@ -201,10 +263,17 @@ assert.strictEqual(t.rateAllowed(counts, 'test-ip', 2, 60000), false);
 
     const fnText = fs.readFileSync(path.join(__dirname, '../netlify/functions/intelligence.js'), 'utf8');
     const appText = fs.readFileSync(path.join(__dirname, '../app-builtin.html'), 'utf8');
-    assert.doesNotMatch(fnText, /GEMINI_API_KEY|generativelanguage\.googleapis\.com|callGemini/);
-    assert.doesNotMatch(appText, /arcAgentGemini|GEMINI_API_KEY|allowGemini/);
+    const indexText = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+    // The Netlify function may check for the presence of GEMINI_API_KEY and
+    // delegate to the gemini-* modules, but must never perform the raw Gemini
+    // HTTP call itself — that call is isolated to gemini-provider.mjs so it
+    // stays easy to audit. The frontend must never see the key or call the
+    // provider directly, under any name.
+    assert.doesNotMatch(fnText, /generativelanguage\.googleapis\.com/);
+    assert.doesNotMatch(appText, /arcAgentGemini|GEMINI_API_KEY|allowGemini|generativelanguage\.googleapis\.com/);
+    assert.doesNotMatch(indexText, /arcAgentGemini|GEMINI_API_KEY|allowGemini|generativelanguage\.googleapis\.com/);
   } finally {
     global.fetch = oldFetch;
   }
-  console.log('Intelligence tests passed: PII minimisation, source allowlisting, strict human approval, deterministic planning, hidden background research, no external AI requests, rate limiting, public-feed handling, digest authentication, and request-size guards.');
+  console.log('Intelligence tests passed: PII minimisation, source allowlisting, strict human approval, deterministic planning, hidden background research, no external AI requests, rate limiting, approved-only chatbot context, separate public-feed view, digest authentication, and request-size guards.');
 })().catch(error => { console.error(error); process.exit(1); });
