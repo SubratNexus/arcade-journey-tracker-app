@@ -42,6 +42,12 @@
   to = "/.netlify/functions/intelligence"
   status = 200
 
+# Separate owner-review endpoint. It does not use or modify /api/release.
+[[redirects]]
+  from = "/api/agent-review"
+  to = "/.netlify/functions/agent-review"
+  status = 200
+
 [[headers]]
   for = "/*"
   [headers.values]
