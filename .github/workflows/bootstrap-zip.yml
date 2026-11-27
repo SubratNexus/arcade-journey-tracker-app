@@ -1,9 +1,9 @@
-name: Import complete Arcade Journey Tracker source
+name: Import Arcade Journey Tracker v9.1.1 (Build 824)
 
 on:
   push:
     paths:
-      - Arcade-Journey-Tracker-v8.6.2-Arcade-Buddy-GitHub-Upload.zip
+      - Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   import-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -28,43 +28,132 @@ jobs:
         with:
           node-version: 22
 
-      - name: Safely extract the full project archive
+      - name: Check for the uploaded project archive
+        id: archive
+        shell: bash
+        env:
+          ARCHIVE: Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip
+        run: |
+          if [[ -f "$ARCHIVE" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Found the v9.1.1 Build 824 project archive."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No project archive is present. This is expected on the follow-up run after the importer removes the ZIP."
+          fi
+
+      - name: Safely replace the app source from the ZIP
+        if: steps.archive.outputs.present == 'true'
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path, PurePosixPath
-          from zipfile import ZipFile
+          from zipfile import ZipFile, BadZipFile
+          import shutil
           import stat
+          import subprocess
 
-          archive = Path("Arcade-Journey-Tracker-v8.6.2-Arcade-Buddy-GitHub-Upload.zip")
-          if not archive.is_file():
-              raise SystemExit("Upload the named project ZIP to the repository root first.")
-
+          ARCHIVE = "Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip"
           root = Path.cwd().resolve()
-          with ZipFile(archive) as package:
-              for member in package.infolist():
-                  name = PurePosixPath(member.filename)
-                  if name.is_absolute() or ".." in name.parts:
-                      raise SystemExit(f"Unsafe archive path blocked: {member.filename}")
+          archive = root / ARCHIVE
+          max_entries = 500
+          max_uncompressed = 120 * 1024 * 1024
+          required = {
+              "package.json",
+              "netlify.toml",
+              "index.html",
+              "app-builtin.html",
+              "tools/build.js",
+              "netlify/functions/intelligence.js",
+              "netlify/functions/release.js",
+              "netlify/functions/agent-review.js",
+          }
+
+          try:
+              package = ZipFile(archive)
+          except BadZipFile as error:
+              raise SystemExit(f"Uploaded file is not a valid ZIP: {error}")
+
+          with package:
+              infos = package.infolist()
+              if len(infos) > max_entries:
+                  raise SystemExit(f"ZIP contains too many entries: {len(infos)} (limit {max_entries}).")
+              bad_member = package.testzip()
+              if bad_member:
+                  raise SystemExit(f"ZIP CRC check failed for: {bad_member}")
+
+              names = set()
+              total_size = 0
+              for member in infos:
+                  raw = member.filename
+                  if "\\" in raw or "\x00" in raw:
+                      raise SystemExit(f"Unsafe ZIP path blocked: {raw}")
+                  path = PurePosixPath(raw)
+                  if path.is_absolute() or ".." in path.parts or any(part.endswith(":") for part in path.parts):
+                      raise SystemExit(f"Unsafe ZIP path blocked: {raw}")
+                  if path.parts and path.parts[0] in {".git", ".github"}:
+                      raise SystemExit(f"ZIP is not allowed to replace repository control files: {raw}")
                   mode = member.external_attr >> 16
                   if stat.S_ISLNK(mode):
-                      raise SystemExit(f"Symbolic link blocked: {member.filename}")
-                  target = (root / Path(*name.parts)).resolve()
+                      raise SystemExit(f"Symbolic link blocked: {raw}")
+                  if not member.is_dir():
+                      if raw in names:
+                          raise SystemExit(f"Duplicate ZIP path blocked: {raw}")
+                      names.add(raw)
+                      total_size += member.file_size
+                      if total_size > max_uncompressed:
+                          raise SystemExit("ZIP uncompressed size exceeds the 120 MiB safety limit.")
+                  destination = (root / Path(*path.parts)).resolve()
+                  if destination != root and root not in destination.parents:
+                      raise SystemExit(f"Archive path escaped repository: {raw}")
+
+              missing = sorted(required - names)
+              if missing:
+                  raise SystemExit("This is not a complete v9.1.1 app source ZIP. Missing: " + ", ".join(missing))
+
+              # Remove previously tracked app files first so files deleted in the new release
+              # do not survive as stale Netlify Functions or static assets. Keep .github intact.
+              tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+              for entry in tracked:
+                  if not entry:
+                      continue
+                  rel = entry.decode("utf-8")
+                  if rel == ARCHIVE or rel == ".github" or rel.startswith(".github/"):
+                      continue
+                  target = (root / rel).resolve()
                   if target != root and root not in target.parents:
-                      raise SystemExit(f"Archive path escaped repository: {member.filename}")
-              package.extractall(root)
+                      raise SystemExit(f"Tracked path escaped repository: {rel}")
+                  original = root / rel
+                  if original.is_symlink() or original.is_file():
+                      original.unlink(missing_ok=True)
+                  elif original.is_dir():
+                      shutil.rmtree(original)
+
+              # Extract only after the full archive has passed validation.
+              for member in infos:
+                  path = PurePosixPath(member.filename)
+                  if member.is_dir():
+                      (root / Path(*path.parts)).mkdir(parents=True, exist_ok=True)
+                  else:
+                      target = root / Path(*path.parts)
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with package.open(member) as source, target.open("wb") as destination:
+                          shutil.copyfileobj(source, destination)
 
           archive.unlink()
-          print("Project archive extracted. The uploaded ZIP has been removed from the repository.")
+          print("Imported the complete Arcade Tracker v9.1.1 / Build 824 source. ZIP removed from repository root.")
           PY
 
       - name: Validate JavaScript and application build
+        if: steps.archive.outputs.present == 'true'
         run: npm run check
 
-      - name: Run calculator, intelligence, and Arcade Buddy tests
+      - name: Run calculator, intelligence, Gemini, profile, and review tests
+        if: steps.archive.outputs.present == 'true'
         run: npm test
 
-      - name: Commit the extracted project to main
+      - name: Commit the validated source to main
+        if: steps.archive.outputs.present == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -74,5 +163,5 @@ jobs:
             echo "No extracted source changes were found."
             exit 1
           fi
-          git commit -m "feat: import full Arcade Journey Tracker with Arcade Buddy"
+          git commit -m "feat: import Arcade Journey Tracker v9.1.1 Build 824"
           git push origin HEAD:main
