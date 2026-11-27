@@ -1,9 +1,9 @@
-name: Import Arcade Journey Tracker v9.1.1 (Build 824)
+name: Import Arcade Journey Tracker v9.2.0 (Build 825)
 
 on:
   push:
     paths:
-      - Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip
+      - Arcade-Journey-Tracker-v9.2.0-Private-Cloud-Account-Sync-Build-825.zip
   workflow_dispatch:
 
 permissions:
@@ -32,11 +32,11 @@ jobs:
         id: archive
         shell: bash
         env:
-          ARCHIVE: Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip
+          ARCHIVE: Arcade-Journey-Tracker-v9.2.0-Private-Cloud-Account-Sync-Build-825.zip
         run: |
           if [[ -f "$ARCHIVE" ]]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "Found the v9.1.1 Build 824 project archive."
+            echo "Found the v9.2.0 Build 825 private cloud project archive."
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "No project archive is present. This is expected on the follow-up run after the importer removes the ZIP."
@@ -53,7 +53,7 @@ jobs:
           import stat
           import subprocess
 
-          ARCHIVE = "Arcade-Journey-Tracker-v9.1.1-Gemini-Approved-Agent-Review-Build-824.zip"
+          ARCHIVE = "Arcade-Journey-Tracker-v9.2.0-Private-Cloud-Account-Sync-Build-825.zip"
           root = Path.cwd().resolve()
           archive = root / ARCHIVE
           max_entries = 500
@@ -65,8 +65,14 @@ jobs:
               "app-builtin.html",
               "tools/build.js",
               "netlify/functions/intelligence.js",
+              "netlify/functions/profile-data.mjs",
+              "arcade-identity.js",
               "netlify/functions/release.js",
               "netlify/functions/agent-review.js",
+              "netlify/lib/arcade-buddy/gemini-provider.mjs",
+              "netlify/lib/arcade-buddy/gemini-agent.mjs",
+              "tools/gemini-test.mjs",
+              "README.md",
           }
 
           try:
@@ -109,7 +115,7 @@ jobs:
 
               missing = sorted(required - names)
               if missing:
-                  raise SystemExit("This is not a complete v9.1.1 app source ZIP. Missing: " + ", ".join(missing))
+                  raise SystemExit("This is not a complete v9.2.0 app source ZIP. Missing: " + ", ".join(missing))
 
               # Remove previously tracked app files first so files deleted in the new release
               # do not survive as stale Netlify Functions or static assets. Keep .github intact.
@@ -141,7 +147,7 @@ jobs:
                           shutil.copyfileobj(source, destination)
 
           archive.unlink()
-          print("Imported the complete Arcade Tracker v9.1.1 / Build 824 source. ZIP removed from repository root.")
+          print("Imported the complete Arcade Tracker v9.2.0 / Build 825 source. ZIP removed from repository root.")
           PY
 
       - name: Validate JavaScript and application build
@@ -163,5 +169,5 @@ jobs:
             echo "No extracted source changes were found."
             exit 1
           fi
-          git commit -m "feat: import Arcade Journey Tracker v9.1.1 Build 824"
+          git commit -m "feat: import Arcade Journey Tracker v9.2.0 Build 825"
           git push origin HEAD:main
