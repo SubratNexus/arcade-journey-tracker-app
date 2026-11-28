@@ -1,0 +1,140 @@
+name: Import Arcade Journey Tracker v9.3.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Arcade-Journey-Tracker-v9.3.3-OpenRouter-LangSearch-Developer-Mode-Fix-Profile-ID-Sync-Build-829.zip
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arcade-journey-tracker-v9.3.3-import
+  cancel-in-progress: false
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate and unpack the update payload
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile, BadZipFile
+          import shutil
+
+          archive = Path('Arcade-Journey-Tracker-v9.3.3-OpenRouter-LangSearch-Developer-Mode-Fix-Profile-ID-Sync-Build-829.zip')
+          if not archive.is_file():
+              raise SystemExit('The exact v9.3.3 Build 829 update ZIP was not found in the repository root.')
+          try:
+              zf = ZipFile(archive)
+          except BadZipFile as exc:
+              raise SystemExit(f'The uploaded update is not a valid ZIP: {exc}')
+
+          required = {
+              'apply_final_release.py',
+              'netlify/lib/arcade-buddy/langsearch-provider.mjs',
+              'netlify/lib/arcade-buddy/openrouter-agent.mjs',
+              'netlify/functions/profile-data.mjs',
+              'tools/openrouter-langsearch-test.mjs',
+              'tools/profile-data-test.mjs',
+              'tools/community-catalog-test.js',
+          }
+          with zf:
+              members = zf.infolist()
+              if len(members) > 40:
+                  raise SystemExit('The update ZIP contains more entries than expected.')
+              if zf.testzip():
+                  raise SystemExit('The update ZIP failed its CRC check.')
+              names = set()
+              total = 0
+              for info in members:
+                  name = info.filename
+                  path = PurePosixPath(name)
+                  if '\\' in name or '\x00' in name or path.is_absolute() or '..' in path.parts or any(p.endswith(':') for p in path.parts):
+                      raise SystemExit(f'Unsafe ZIP member path blocked: {name}')
+                  if path.parts and path.parts[0] in {'.git', '.github'}:
+                      raise SystemExit(f'Update ZIP may not replace repository control files: {name}')
+                  names.add(name)
+                  total += info.file_size
+              if not required.issubset(names):
+                  raise SystemExit('Update ZIP is incomplete. Missing: ' + ', '.join(sorted(required - names)))
+              if total > 8 * 1024 * 1024:
+                  raise SystemExit('The update ZIP exceeds the 8 MB uncompressed limit.')
+              payload = Path('.arcade-v933-payload')
+              shutil.rmtree(payload, ignore_errors=True)
+              payload.mkdir(parents=True)
+              for name in required - {'apply_final_release.py'}:
+                  destination = payload / name
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(zf.read(name))
+              Path('apply_final_release.py').write_bytes(zf.read('apply_final_release.py'))
+          print('Update archive validated and unpacked. All required files are present.')
+          PY
+
+      - name: Apply the guarded v9.3.3 source update
+        run: python apply_final_release.py
+
+      - name: Install dependencies without generating a lockfile
+        run: npm install --package-lock=false --no-audit --no-fund
+
+      - name: Run syntax and build checks
+        run: npm run check
+
+      - name: Verify generated test script syntax
+        run: node --check tools/smoke-test.js
+
+      - name: Run the complete repository test suite
+        run: npm test
+
+      - name: Remove importer files and prepare the source commit
+        shell: bash
+        run: |
+          rm -rf .arcade-v933-payload apply_final_release.py
+          rm -f Arcade-Journey-Tracker-v9.3.3-OpenRouter-LangSearch-Developer-Mode-Fix-Profile-ID-Sync-Build-829.zip
+          rm -f Arcade-Journey-Tracker-v9.3.0-OpenRouter-LangSearch-Profile-ID-Sync-Build-826.zip
+          rm -f Arcade-Journey-Tracker-v9.3.1-OpenRouter-LangSearch-Profile-ID-Sync-Build-827.zip
+          rm -f Arcade-Journey-Tracker-v9.3.2-OpenRouter-LangSearch-Developer-Mode-Fix-Profile-ID-Sync-Build-828.zip
+          rm -f .github/workflows/import-final-v9.3.0.yml
+          rm -f .github/workflows/import-final-v9.3.2.yml
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898292+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes were produced; refusing an empty release commit."
+            exit 1
+          fi
+          git commit -m "release: Arcade Journey Tracker v9.3.3 Build 829"
+          git push origin main
+
+      - name: Create full-source ZIP from the tested commit
+        run: git archive --format=zip --output=Arcade-Journey-Tracker-v9.3.3-Full-Source-Build-829.zip HEAD
+
+      - name: Upload full-source ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Arcade-Journey-Tracker-v9.3.3-Full-Source-Build-829
+          path: Arcade-Journey-Tracker-v9.3.3-Full-Source-Build-829.zip
+          if-no-files-found: error
+          retention-days: 30
